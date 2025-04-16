@@ -1,0 +1,134 @@
+const express = require('express');
+const path = require('path');
+const gdal = require('gdal-async');
+const sharp = require('sharp');
+const cors = require('cors');
+
+const app = express();
+const port = 3000;
+const dataPath = path.join(__dirname, 'data');
+
+app.use(cors());
+app.use(express.json());
+
+// Servir arquivos estáticos
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Rota para verificar se o servidor está rodando
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Rota para dados GeoJSON
+app.get('/api/geojson', (req, res) => {
+  const geojsonPath = path.join(dataPath, 'lotes.geojson');
+  res.sendFile(geojsonPath);
+});
+
+// Rota para servir os tiles do TIF
+app.get('/api/tiles/:z/:x/:y', async (req, res) => {
+  console.log(`Requisição de tile: z=${req.params.z}, x=${req.params.x}, y=${req.params.y}`);
+  try {
+    const { z, x, y } = req.params;
+    const z_int = parseInt(z);
+    const x_int = parseInt(x);
+    const y_int = parseInt(y);
+    const tileSize = 256;
+
+    // Abrir o arquivo TIF
+    const tifPath = path.join(dataPath, 'Iturama-2019.tif');
+    const dataset = gdal.open(tifPath);
+    const band1 = dataset.bands.get(1);
+    const band2 = dataset.bands.get(2);
+    const band3 = dataset.bands.get(3);
+
+    const width = dataset.rasterSize.x;
+    const height = dataset.rasterSize.y;
+
+    // Calcular o número total de tiles para este nível de zoom
+    const numTiles = Math.pow(2, z_int);
+    
+    // Calcular as coordenadas do tile em relação à imagem TIF
+    const tileXRatio = x_int / numTiles;
+    const tileYRatio = y_int / numTiles;
+    
+    // Converter para coordenadas de pixel na imagem
+    const pixelX = Math.floor(tileXRatio * width);
+    const pixelY = Math.floor(tileYRatio * height);
+
+    // Verificar se as coordenadas estão dentro dos limites
+    if (pixelX < 0 || pixelY < 0 || pixelX >= width || pixelY >= height) {
+      // Se estiver fora dos limites, retornar um tile vazio
+      const emptyTile = Buffer.alloc(tileSize * tileSize * 3);
+      const image = sharp(emptyTile, {
+        raw: {
+          width: tileSize,
+          height: tileSize,
+          channels: 3
+        }
+      });
+      res.setHeader('Content-Type', 'image/png');
+      return image.png().pipe(res);
+    }
+
+    // Converter coordenadas do pixel para coordenadas do mundo
+    const [minX, maxY, maxX, minY] = [
+      dataset.geoTransform[0] + (pixelX * dataset.geoTransform[1]),
+      dataset.geoTransform[3] + (pixelY * dataset.geoTransform[5]),
+      dataset.geoTransform[0] + ((pixelX + tileSize) * dataset.geoTransform[1]),
+      dataset.geoTransform[3] + ((pixelY + tileSize) * dataset.geoTransform[5])
+    ];
+
+    // Ler os dados das bandas
+    const data1 = band1.pixels.read(pixelX, pixelY, tileSize, tileSize);
+    const data2 = band2.pixels.read(pixelX, pixelY, tileSize, tileSize);
+    const data3 = band3.pixels.read(pixelX, pixelY, tileSize, tileSize);
+
+    // Criar buffer RGB
+    const rgbData = Buffer.alloc(tileSize * tileSize * 3);
+    for (let i = 0; i < tileSize * tileSize; i++) {
+      const row = Math.floor(i / tileSize);
+      const col = i % tileSize;
+      const idx = row * tileSize + col;
+      
+      // Normalizar os valores para 0-255
+      const r = Math.min(255, Math.max(0, data1[idx]));
+      const g = Math.min(255, Math.max(0, data2[idx]));
+      const b = Math.min(255, Math.max(0, data3[idx]));
+      
+      rgbData[i * 3] = r;     // R
+      rgbData[i * 3 + 1] = g; // G
+      rgbData[i * 3 + 2] = b; // B
+    }
+
+    // Converter para PNG usando sharp
+    const image = sharp(rgbData, {
+      raw: {
+        width: tileSize,
+        height: tileSize,
+        channels: 3
+      }
+    });
+
+    // Enviar a imagem
+    res.setHeader('Content-Type', 'image/png');
+    image.png().pipe(res);
+
+  } catch (error) {
+    console.error('Erro ao processar tile:', error);
+    res.status(500).json({ error: 'Erro ao processar tile' });
+  }
+});
+
+// Rota para servir arquivos estáticos do frontend
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Rota catch-all para o frontend
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Iniciar o servidor
+app.listen(port, () => {
+  console.log(`Servidor rodando em http://localhost:${port}`);
+});

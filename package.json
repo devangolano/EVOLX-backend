@@ -1,0 +1,21 @@
+{
+  "name": "evolx-backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "description": "",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "gdal-async": "^3.10.2",
+    "proj4": "^2.15.0",
+    "sharp": "^0.34.1"
+  }
+}
